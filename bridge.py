@@ -1,74 +1,30 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
+
 # -*- coding: utf-8 -*-
 
 import json
 import logging
 import subprocess
+import sys
 from configparser import SafeConfigParser
 
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram.ext import Updater, MessageHandler, Filters
 from fbchat import Client
 from fbchat.models import *
 
-# OTHER STUFF
 
-mutedFB = []
-mutedTL = []
-rawTL = []
-
-def toggleRawTL(bot, update):
-    if update.message.from_user.first_name and update.message.from_user.last_name and \
-        update.message.from_user.last_name is not "ギルバイツ":
-        user_name = update.message.from_user.first_name + " " + \
-                update.message.from_user.last_name
-    else:
-        user_name = update.message.from_user.username
-
-    if update.message.from_user.id in rawTL:
-        rawTL.remove(update.message.from_user.id) 
-        sendTextTL(user_name + " no longer sends raw messages.")
-    else:
-        rawTL.append(update.message.from_user.id) 
-        sendTextTL(user_name + " now sends raw messages.")
-
-def toggleMuteTL(bot, update):
-    """Toggle mute state"""
-    if update.message.from_user.first_name and update.message.from_user.last_name and \
-        update.message.from_user.last_name is not "ギルバイツ":
-        user_name = update.message.from_user.first_name + " " + \
-                update.message.from_user.last_name
-    else:
-        user_name = update.message.from_user.username
-
-    if update.message.from_user.id in mutedTL:
-        mutedTL.remove(update.message.from_user.id) 
-        sendTextTL(user_name + " is now unmuted.")
-    else:
-        mutedTL.append(update.message.from_user.id) 
-        sendTextTL(user_name + " is now muted.")
-
-def toggleMuteFB(user_id, user_name):
-    """Toggle mute state"""
-    if user_id in mutedFB:
-        mutedFB.remove(user_id) 
-        sendTextFB(user_name + " is now unmuted.")
-    else:
-        mutedFB.append(user_id) 
-        sendTextFB(user_name + " is now muted.")
-
-# Set logging level
-# DEBUG for debug mode
-# INFO for production mode
-# SILENT for no stuff
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Set logging level: DEBUG, INFO, SILENT
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def prepareForJSON(text):
     return text.strip("'<>() ").replace("\'", "\"").replace("None", "\"None\"") \
         .replace("[]", "\"[]\"").replace("False", "\"False\"").replace("True", "\"True\"")
 
-# FACEBOOK STUFF #
+
+# ================================================== #
+# ======= FACEBOOK STUFF =========================== #
+# ================================================== #
 
 class FBClient(Client):
     def onMessage(self, author_id, message_object, thread_id, thread_type, **kwargs):
@@ -80,23 +36,21 @@ class FBClient(Client):
         self.markAsRead(author_id)
         self.markAsSeen()
 
+        if thread_id != our_thread_id:
+            logger.info("Got a message from different group. Skipping.");
+            return
+
         user = fbclient.fetchUserInfo(author_id)
         for uid in user:
             author_name = user[uid].name
         author_name = "*" + author_name + "*"
-
-        if message_object.text == "/mute":
-            logger.info("Toggling mute for %s", author_name)
-            toggleMuteFB(author_id, author_name)
-            return
 
         if message_object.attachments:
             processAtt(message_object, author_name)
 
         if not message_object.text:
             return
-
-        if message_object.text[0] == '!' or author_id in mutedFB:
+        elif message_object.text[0] == '!':
             logger.info("Skipping silented message")
             return
 
@@ -111,25 +65,28 @@ def processAtt(msg, name):
         att = attachment
         try:
             sendPhotoTL(att.large_preview_url)
-            sendTextTL(name + " sent photo:")
+            sendTextTL(name + " sent photo...")
         except AttributeError as ae:
             sendVideoTL(att.preview_url)
-            sendTextTL(name + " sent video:")
+            sendTextTL(name + " sent video...")
             pass
         except:
             logger.warning("Couldn't sent attachment")
-            sentTextTL(name + " sent something but I can't see what it is")
+            sentTextTL(name + " sent something but I can't see what it is :(")
             pass
 
 def sendTextFB(body):
-    """No magick here boi"""
-    logger.info("Sending message to %s", thread_id)
-    fbclient.send(Message(body), thread_id=thread_id, thread_type = thread_type)
+    logger.info("Sending message to FB: %s", our_thread_id)
+    fbclient.send(Message(body), thread_id=our_thread_id, thread_type=thread_type)
 
 def sendPhotoFB(url):
-    fbclient.sendRemoteImage(url, message=Message(text=''), thread_id=thread_id, thread_type=thread_type)
+    logger.info("Sending photo to FB: %s", our_thread_id)
+    fbclient.sendRemoteImage(url, message=Message(text=''), thread_id=our_thread_id, thread_type=thread_type)
 
-# TELEGRAM STUFF #
+
+# ================================================== #
+# ======= TELEGRAM STUFF =========================== #
+# ================================================== #
 
 def sendPhotoTL(url):
     updater.bot.sendPhoto(group_id, url)
@@ -137,73 +94,49 @@ def sendPhotoTL(url):
 def sendVideoTL(url):
     updater.bot.sendVideo(group_id, url)
 
+def sendTextTL(body):
+    updater.bot.sendMessage(group_id, body, parse_mode='Markdown')
+
 def parseText(bot, update):
     """Parse text only message"""
-    forward_body = ""
 
-    if update.message.from_user.id in mutedTL or update.message.text[0] == '!':
+    if update.message.text[0] == '!':
         logger.info("Skipping silented message")
         return
 
-    if update.message.reply_to_message:
-        if update.message.reply_to_message.from_user.first_name is not None and update.message.reply_to_message.from_user.last_name is not None:
-            forward_body = forward_body + "> " + \
-                        update.message.reply_to_message.from_user.first_name + \
-                        update.message.reply_to_message.from_user.last_name + ":\n"
-        else:
-            forward_body = "SaintGNU:\n"
+    forward_body = update.message.from_user.first_name
+    if update.message.from_user.last_name is not None:
+        forward_body += " " + update.message.from_user.last_name
+    forward_body += ":\n"
 
+    if update.message.reply_to_message:
+        forward_body += ">>" + update.message.reply_to_message.from_user.first_name
+        if update.message.reply_to_message.from_user.last_name is not None:
+            forward_body += " " + update.message.reply_to_message.from_user.last_name
         for line in update.message.reply_to_message.text.split('\n'):
-            forward_body = forward_body + "> " + line + "\n"
-    if update.message.from_user.id in rawTL: 
-        forward_body = update.message.text
-        rawTL.remove(update.message.from_user.id) 
-    else:
-        if update.message.from_user.first_name is not None and update.message.from_user.last_name is not None and \
-            update.message.from_user.last_name is not "ギルバイツ":
-            username = update.message.from_user.first_name + " " + \
-                    update.message.from_user.last_name
-        elif update.message.from_user.username is not None:
-            username = update.message.from_user.username
-        elif update.message.from_user.first_name is not None:
-            username = update.message.from_user.first_name + " Noname"
-        else:
-            username = "Frajer bez imienia"
-        forward_body = forward_body + username + ":\n" + update.message.text
+            forward_body += "\n>" + line
+
+    forward_body += "\n" + update.message.text
     sendTextFB(forward_body)
 
-def sendTextTL(body):
-    """Send text from FB to telegram"""
-    updater.bot.sendMessage(group_id, body, parse_mode='Markdown')
 
 def parsePhotos(bot, update):
     """Parse photos"""
-
-    if update.message.from_user.id in mutedTL:
-        logger.info("Skipping silented message")
-        return
 
     max_res = 0 
     photo_id = ""
     photo = json.loads(prepareForJSON(str(update.message)))
 
     # Send photo's owner credentials
-    if update.message.from_user.first_name is not None and update.message.from_user.last_name is not None and \
-        update.message.from_user.last_name is not "ギルバイツ":
-        username = update.message.from_user.first_name + " " + \
-                update.message.from_user.last_name
-    elif update.message.from_user.username is not None:
-        username = update.message.from_user.username
-    elif update.message.from_user.first_name is not None:
-        username = update.message.from_user.first_name + " Noname"
-    else:
-        username = "Frajer bez imienia"
-
-    pre_body = username + " sent photo:"
-    sendTextFB(pre_body) 
+    caption_body = update.message.from_user.first_name
+    if update.message.from_user.last_name is not None:
+        caption_body += " " + update.message.from_user.last_name
+    caption_body += " sent photo..."
+    sendTextFB(caption_body) 
 
     # This is like the ugliest hack ever, but I'm not in a mood to fix it
     # It's like 3 AM
+        # Oh shit, I ain't touching that either. Someone pls fix.
     # TODO: FIX THIS SOMETIME
     for info in photo:
         if info == "photo":
@@ -216,70 +149,45 @@ def parsePhotos(bot, update):
     sendPhotoFB(bot.getFile(photo_id).file_path)
     logger.info("Done...")
 
+
 def parseVideos(bot, update):
-    """Parse videos from TL"""
+    """Parse videos from TG"""
+    #no1cares
     pre_body = update.message.from_user.first_name + " " + \
-            update.message.from_user.last_name + " sent a video but I'm not able to show it to you yet! :("
-    sendTextFB(pre_body) 
+            update.message.from_user.last_name + " sent a video but I'm not able to show it to you :("
+    sendTextFB(pre_body)
 
 #    video_id = update.message.video.file_id
 #    video_size = update.message.video.file_size
+
 
 def error(bot, update, error):
         """Log errors and stuff"""
         logger.warning('[ERR]"%s" caused error "%s"', update, error)
 
 
-# Read settings from config file
-try:
-    config = SafeConfigParser()
-    config.read("config.ini")
-
-    group_id = config.get("Telegram", "GroupID")
-    updater = Updater(config.get("Telegram", "BotAPIKey"))
-
-    thread_id = config.get("Facebook", "ChatID")
-    thread_type = ThreadType.GROUP
-    fbclient = FBClient(config.get("Facebook", "Email"), config.get("Facebook", "Passwd"))
-except:
-    logger.warning("Could not load configuration file")
-
-if config.get("MOTD", "Start") is not "None":
-    try:
-        with open(config.get("MOTD", "Start"), "r") as startFile:
-            msg = startFile.read()
-            sendTextFB(msg)
-            sendTextTL(msg)
-    except:
-        logger.warning("Could not read start message")
-if config.get("MOTD", "Update") is not "None":
-    try:
-        with open(config.get("MOTD", "Update"), "r") as updateFile:
-            msg = updateFile.read()
-            if msg is not "":
-                msg = "New updates: " + msg
-                sendTextFB(msg)
-                sendTextTL(msg)
-    except:
-        logger.warning("Could not read update message")
-
-def sendPope(bot, update):
-    sendTextFB("@dailypope")
+# =================================================== #
+# ======= BRIDGE STUFF ============================== #
+# =================================================== #
 
 def main():
     """Start the bot with async listening and
     add function to parse messages"""
+
+    if config.get("MOTD", "Start") is not "None":
+        try:
+            with open(config.get("MOTD", "Start"), "r") as startFile:
+                msg = startFile.read()
+                sendTextFB(msg)
+                sendTextTL(msg)
+        except:
+            logger.warning("Could not read start message")
+
     dp = updater.dispatcher
-
-    dp.add_handler(CommandHandler("mute", toggleMuteTL))
-    # dp.add_handler(CommandHandler("raw", toggleRawTL))
-    dp.add_handler(CommandHandler("pope", sendPope))
-
-    dp.add_handler(MessageHandler(Filters.text, parseText))
-    dp.add_handler(MessageHandler(Filters.photo , parsePhotos))
+    dp.add_handler(MessageHandler(Filters.text,  parseText))
+    dp.add_handler(MessageHandler(Filters.photo, parsePhotos))
     dp.add_handler(MessageHandler(Filters.video, parseVideos))
     dp.add_error_handler(error)
-
     updater.start_polling()
     #updater.idle()
 
@@ -296,4 +204,24 @@ def main():
 
 
 if __name__ == '__main__':
+    config = SafeConfigParser()
+    try:
+        config.read("config.ini")
+    except:
+        logger.warning("No config file!")
+        sys.exit()
+    try:
+        #telegram
+        group_id = config.get("Telegram", "GroupID")
+        updater = Updater(config.get("Telegram", "BotAPIKey"))
+        logger.info("Telegram set. OK")
+
+        #facebook
+        our_thread_id = config.get("Facebook", "ChatID")
+        thread_type = ThreadType.GROUP
+        fbclient = FBClient(config.get("Facebook", "Email"), config.get("Facebook", "Passwd"))
+        logger.info("Facebook set. OK")
+    except:
+        logger.warning("configuration invalid")
+        sys.exit()
     main()
