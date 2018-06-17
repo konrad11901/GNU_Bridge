@@ -5,6 +5,7 @@
 import json
 import logging
 import subprocess
+import sys
 from configparser import SafeConfigParser
 
 from telegram.ext import Updater, MessageHandler, Filters
@@ -112,8 +113,9 @@ def parseText(bot, update):
             forward_body += " " + update.message.reply_to_message.from_user.last_name
         for line in update.message.reply_to_message.text.split('\n'):
             forward_body += "\n>" + line
+        forward_body += "\n"
 
-    forward_body += "\n" + update.message.text
+    forward_body += update.message.text
     sendTextFB(forward_body)
 
 
@@ -198,17 +200,23 @@ def main():
 
 if __name__ == '__main__':
     config = SafeConfigParser()
-    config.read("config.ini")
+    try:
+        config.read("config.ini")
+    except:
+        logger.warning("No config file!")
+        sys.exit()
+    try:
+        #telegram
+        group_id = config.get("Telegram", "GroupID")
+        updater = Updater(config.get("Telegram", "BotAPIKey"))
+        logger.info("Telegram set. OK")
 
-    #telegram
-    group_id = config.get("Telegram", "GroupID")
-    updater = Updater(config.get("Telegram", "BotAPIKey"))
-    logger.info("Telegram set. OK")
-
-    #facebook
-    our_thread_id = config.get("Facebook", "ChatID")
-    thread_type = ThreadType.GROUP
-    fbclient = FBClient(config.get("Facebook", "Email"), config.get("Facebook", "Passwd"))
-    logger.info("Facebook set. OK")
-
+        #facebook
+        our_thread_id = config.get("Facebook", "ChatID")
+        thread_type = ThreadType.GROUP
+        fbclient = FBClient(config.get("Facebook", "Email"), config.get("Facebook", "Passwd"))
+        logger.info("Facebook set. OK")
+    except:
+        logger.warning("configuration invalid")
+        sys.exit()
     main()
