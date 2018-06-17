@@ -5,7 +5,6 @@
 import json
 import logging
 import subprocess
-import sys
 from configparser import SafeConfigParser
 
 from telegram.ext import Updater, MessageHandler, Filters
@@ -29,7 +28,7 @@ def prepareForJSON(text):
 class FBClient(Client):
     def onMessage(self, author_id, message_object, thread_id, thread_type, **kwargs):
         if author_id == self.uid:
-            logger.info("Read self sent message")
+            logger.info("[FB] Read self sent message.")
             return
 
         self.markAsDelivered(author_id, thread_id)
@@ -37,7 +36,7 @@ class FBClient(Client):
         self.markAsSeen()
 
         if thread_id != our_thread_id:
-            logger.info("Got a message from different group. Skipping.");
+            logger.info("[FB] Got a message from different group. Skipping.");
             return
 
         user = fbclient.fetchUserInfo(author_id)
@@ -48,19 +47,17 @@ class FBClient(Client):
         if message_object.attachments:
             processAtt(message_object, author_name)
 
-        if not message_object.text:
-            return
-        elif message_object.text[0] == '!':
-            logger.info("Skipping silented message")
+        if not message_object.text or message_object.text[0] == '!':
+            logger.info("[FB] Skipping empty or silented message.")
             return
 
         forward_text = author_name + ":\n" + message_object.text
         sendTextTL(forward_text)
 
-        logger.info("{} from {} in {}".format(message_object, thread_id, thread_type.name))
+        logger.info("[FB] {} from {} in {}".format(message_object, thread_id, thread_type.name))
 
 def processAtt(msg, name):
-    """Process image and send it to telegram"""
+    """Process attachment and send it to telegram"""
     for attachment in msg.attachments:
         att = attachment
         try:
@@ -71,16 +68,16 @@ def processAtt(msg, name):
             sendTextTL(name + " sent video...")
             pass
         except:
-            logger.warning("Couldn't sent attachment")
+            logger.warning("[FB] Couldn't sent attachment!")
             sentTextTL(name + " sent something but I can't see what it is :(")
             pass
 
 def sendTextFB(body):
-    logger.info("Sending message to FB: %s", our_thread_id)
+    logger.info("[FB] Sending message: %s", our_thread_id)
     fbclient.send(Message(body), thread_id=our_thread_id, thread_type=thread_type)
 
 def sendPhotoFB(url):
-    logger.info("Sending photo to FB: %s", our_thread_id)
+    logger.info("[FB] Sending photo: %s", our_thread_id)
     fbclient.sendRemoteImage(url, message=Message(text=''), thread_id=our_thread_id, thread_type=thread_type)
 
 
@@ -101,7 +98,7 @@ def parseText(bot, update):
     """Parse text only message"""
 
     if update.message.text[0] == '!':
-        logger.info("Skipping silented message")
+        logger.info("[TG] Skipping silented message.")
         return
 
     forward_body = update.message.from_user.first_name
@@ -145,13 +142,13 @@ def parsePhotos(bot, update):
                     max_res = meta["width"]
                     photo_id = meta["file_id"]
 
-    logger.info("Sending photo %s size %s", photo_id, max_res)
+    logger.info("[TG] Sending photo %s size %s", photo_id, max_res)
     sendPhotoFB(bot.getFile(photo_id).file_path)
-    logger.info("Done...")
+    logger.info("[TG] Done...")
 
 
 def parseVideos(bot, update):
-    """Parse videos from TG"""
+    """Parse videos"""
     #no1cares
     pre_body = update.message.from_user.first_name + " " + \
             update.message.from_user.last_name + " sent a video but I'm not able to show it to you :("
@@ -162,26 +159,29 @@ def parseVideos(bot, update):
 
 
 def error(bot, update, error):
-        """Log errors and stuff"""
-        logger.warning('[ERR]"%s" caused error "%s"', update, error)
+        logger.warning('[TG] [ERR]"%s" caused error "%s"', update, error)
 
 
 # =================================================== #
 # ======= BRIDGE STUFF ============================== #
 # =================================================== #
 
+def sendMOTD(key):
+    if config.get("MOTD", key) is not "None":
+        try:
+            with open(config.get("MOTD", key), "r") as aFile:
+                msg = aFile.read()
+                sendTextFB(msg)
+                sendTextTL(msg)
+        except:
+            logger.warning("Could not read motd " + key)
+
+
 def main():
     """Start the bot with async listening and
     add function to parse messages"""
 
-    if config.get("MOTD", "Start") is not "None":
-        try:
-            with open(config.get("MOTD", "Start"), "r") as startFile:
-                msg = startFile.read()
-                sendTextFB(msg)
-                sendTextTL(msg)
-        except:
-            logger.warning("Could not read start message")
+    sendMOTD("Start")
 
     dp = updater.dispatcher
     dp.add_handler(MessageHandler(Filters.text,  parseText))
@@ -193,35 +193,22 @@ def main():
 
     fbclient.listen()
 
-    if config.get("MOTD", "Stop") is not "None":
-        try:
-            with open(config.get("MOTD", "Stop"), "r") as stopFile:
-                msg = stopFile.read()
-                sendTextFB(msg)
-                sendTextTL(msg)
-        except:
-            logger.warning("Could not read stop message")
+    sendMOTD("Stop")
 
 
 if __name__ == '__main__':
     config = SafeConfigParser()
-    try:
-        config.read("config.ini")
-    except:
-        logger.warning("No config file!")
-        sys.exit()
-    try:
-        #telegram
-        group_id = config.get("Telegram", "GroupID")
-        updater = Updater(config.get("Telegram", "BotAPIKey"))
-        logger.info("Telegram set. OK")
+    config.read("config.ini")
 
-        #facebook
-        our_thread_id = config.get("Facebook", "ChatID")
-        thread_type = ThreadType.GROUP
-        fbclient = FBClient(config.get("Facebook", "Email"), config.get("Facebook", "Passwd"))
-        logger.info("Facebook set. OK")
-    except:
-        logger.warning("configuration invalid")
-        sys.exit()
+    #telegram
+    group_id = config.get("Telegram", "GroupID")
+    updater = Updater(config.get("Telegram", "BotAPIKey"))
+    logger.info("Telegram set. OK")
+
+    #facebook
+    our_thread_id = config.get("Facebook", "ChatID")
+    thread_type = ThreadType.GROUP
+    fbclient = FBClient(config.get("Facebook", "Email"), config.get("Facebook", "Passwd"))
+    logger.info("Facebook set. OK")
+
     main()
